@@ -31,6 +31,8 @@ BLOCKING_RULES: dict[str, tuple[str, ...]] = {
     "dob_surname_initial": ("std_dob", "_surname_initial"),
     "dob_first": ("std_dob", "std_first_canon"),
     "name_birth_year": ("std_first_canon", "std_surname", "_birth_year"),
+    "dob_postal": ("std_dob", "std_postal"),
+    "address": ("std_postal", "std_address"),
 }
 MAX_BLOCK = 50  # larger blocks (a call-centre number, a placeholder email) carry no information
 
@@ -91,17 +93,26 @@ def _first_level(row_a: tuple, row_b: tuple) -> int:
         return 3
     if first_a == middle_b or first_b == middle_a:
         return 2
+    if _swapped(row_a, row_b):
+        return 2
     if JaroWinkler.normalized_similarity(first_a, first_b) >= 0.92:
         return 2
     return 1
 
 
-def _surname_level(a: str | None, b: str | None) -> int:
+def _swapped(row_a: tuple, row_b: tuple) -> bool:
+    """First name and surname captured the wrong way round on one side."""
+    return (row_a[2] is not None and row_a[2] == row_b[5]
+            and row_b[2] is not None and row_b[2] == row_a[5])
+
+
+def _surname_level(row_a: tuple, row_b: tuple) -> int:
+    a, b = row_a[5], row_b[5]
     if a is None or b is None:
         return 0
     if a == b:
         return 3
-    if surname_tokens(a) & surname_tokens(b):
+    if surname_tokens(a) & surname_tokens(b) or _swapped(row_a, row_b):
         return 2
     return 2 if JaroWinkler.normalized_similarity(a, b) >= 0.92 else 1
 
@@ -117,7 +128,7 @@ def compare_rows(ra: tuple, rb: tuple) -> tuple[int, ...]:
         nid = 2 if DamerauLevenshtein.distance(nid_a, nid_b) <= 1 else 1
     dob = 0 if ra[1] is None or rb[1] is None else _dob_level(ra[1], rb[1])
     first = _first_level(ra, rb)
-    surname = _surname_level(ra[5], rb[5])
+    surname = _surname_level(ra, rb)
     phone = 0 if ra[6] is None or rb[6] is None else (2 if ra[6] == rb[6] else 1)
     email = 0 if ra[7] is None or rb[7] is None else (2 if ra[7] == rb[7] else 1)
     if ra[8] is None or rb[8] is None:
@@ -136,6 +147,9 @@ class ComparisonCache:
     store: dict[tuple, tuple[int, ...]] = field(default_factory=dict)
     hits: int = 0
     misses: int = 0
+
+    def pairs(self, df: pd.DataFrame, rules: dict[str, tuple[str, ...]] | None = None) -> pd.DataFrame:
+        return candidate_pairs(df, rules=rules)
 
     def compare(self, df: pd.DataFrame, pairs: pd.DataFrame) -> np.ndarray:
         rows = list(df[COMPARE_COLUMNS].astype(object).where(df[COMPARE_COLUMNS].notna(), None)
@@ -164,6 +178,8 @@ class FSModel:
     u: dict[str, np.ndarray]
     prior: float
     iterations: int
+    # Term frequencies for exact agreement: field -> {standardised value: share of records}
+    tf: dict[str, dict[str, float]] = field(default_factory=dict)
 
     def level_weights(self) -> dict[str, np.ndarray]:
         """log2(m/u) per field and level; level 0 (missing) carries no evidence."""
@@ -174,15 +190,37 @@ class FSModel:
             out[f] = w
         return out
 
-    def match_weight(self, gamma: np.ndarray) -> np.ndarray:
+    def tf_adjustment(self, gamma: np.ndarray, values: dict[str, np.ndarray] | None) -> dict[str, np.ndarray]:
+        """Extra weight for exact agreement on a rare value, less for a common one.
+
+        Following Splink, the u of exact agreement is replaced by the share of records holding that
+        value: agreeing on DLAMINI is weaker evidence than agreeing on a surname held by 1 in 5,000.
+        """
+        out: dict[str, np.ndarray] = {}
+        if not values:
+            return out
+        for f, freq in self.tf.items():
+            if f not in values:
+                continue
+            k = FIELDS.index(f)
+            exact = gamma[:, k] == LEVELS[f]
+            share = np.array([freq.get(v, np.nan) if e else np.nan for v, e in zip(values[f], exact,
+                                                                                    strict=True)])
+            ratio = self.u[f][LEVELS[f]] / np.nan_to_num(share, nan=1.0)
+            out[f] = np.where(np.isnan(share), 0.0, np.log2(ratio))
+        return out
+
+    def match_weight(self, gamma: np.ndarray, values: dict[str, np.ndarray] | None = None) -> np.ndarray:
         lw = self.level_weights()
         total = np.full(len(gamma), np.log2(self.prior / (1 - self.prior)))
         for k, f in enumerate(FIELDS):
             total += lw[f][gamma[:, k]]
+        for adj in self.tf_adjustment(gamma, values).values():
+            total += adj
         return total
 
-    def posterior(self, gamma: np.ndarray) -> np.ndarray:
-        return 1.0 / (1.0 + np.exp2(-self.match_weight(gamma)))
+    def posterior(self, gamma: np.ndarray, values: dict[str, np.ndarray] | None = None) -> np.ndarray:
+        return 1.0 / (1.0 + np.exp2(-self.match_weight(gamma, values)))
 
     def as_dict(self) -> dict:
         return {
@@ -190,10 +228,28 @@ class FSModel:
             "iterations": self.iterations,
             "fields": {f: {"m": [round(float(x), 5) for x in self.m[f][1:]],
                            "u": [round(float(x), 5) for x in self.u[f][1:]]} for f in FIELDS},
+            "tf_fields": sorted(self.tf),
         }
 
 
-def estimate_u(df: pd.DataFrame, n_pairs: int = 100_000, seed: int = 0) -> dict[str, np.ndarray]:
+TF_COLUMNS = {"surname": "std_surname", "first": "std_first_canon"}
+
+
+def term_frequencies(df: pd.DataFrame) -> dict[str, dict[str, float]]:
+    out = {}
+    for f, col in TF_COLUMNS.items():
+        counts = df[col].dropna().value_counts()
+        out[f] = (counts / counts.sum()).to_dict()
+    return out
+
+
+def pair_values(df: pd.DataFrame, pairs: pd.DataFrame) -> dict[str, np.ndarray]:
+    """Side-a values of the term-frequency fields for each pair (equal to side b when they agree)."""
+    a = pairs["a"].to_numpy()
+    return {f: df[col].to_numpy(dtype=object)[a] for f, col in TF_COLUMNS.items()}
+
+
+def estimate_u(df: pd.DataFrame, n_pairs: int = 100_000, seed: int = 0, engine=None) -> dict[str, np.ndarray]:
     """u-probabilities from random record pairs, which are almost all non-matches.
 
     Estimating u this way (rather than letting EM find it) is what keeps EM honest: blocked pairs are
@@ -204,7 +260,8 @@ def estimate_u(df: pd.DataFrame, n_pairs: int = 100_000, seed: int = 0) -> dict[
     a = rng.integers(0, n, size=n_pairs)
     b = rng.integers(0, n, size=n_pairs)
     keep = a != b
-    gamma = ComparisonCache().compare(df, pd.DataFrame({"a": a[keep], "b": b[keep]}))
+    engine = engine if engine is not None else ComparisonCache()
+    gamma = engine.compare(df, pd.DataFrame({"a": a[keep], "b": b[keep]}))
     u = {}
     for k, f in enumerate(FIELDS):
         g = gamma[:, k]
@@ -213,14 +270,27 @@ def estimate_u(df: pd.DataFrame, n_pairs: int = 100_000, seed: int = 0) -> dict[
     return u
 
 
+def _patterns(gamma: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Distinct comparison vectors and how often each occurs.
+
+    Each vector is packed into one integer (base 4, one digit per field), which is far faster than
+    sorting rows. At most 4**7 = 16,384 patterns exist, so EM runs over patterns, not pairs.
+    """
+    if len(gamma) == 0:
+        return np.empty((0, len(FIELDS)), dtype=np.int8), np.empty(0)
+    base = 4 ** np.arange(gamma.shape[1] - 1, -1, -1, dtype=np.int64)  # first field most significant
+    codes, counts = np.unique(gamma.astype(np.int64) @ base, return_counts=True)
+    patterns = ((codes[:, None] // base) % 4).astype(np.int8)
+    return patterns, counts.astype(float)
+
+
 def fit_em(gamma: np.ndarray, u: dict[str, np.ndarray], max_iter: int = 500, tol: float = 1e-8,
            prior: float = 0.5, eps: float = 1e-6) -> FSModel:
     """Estimate m and the match prior on blocked pairs by EM, holding u fixed.
 
     Fields are assumed conditionally independent given match status (the Fellegi-Sunter model).
     """
-    patterns, counts = np.unique(gamma, axis=0, return_counts=True)
-    counts = counts.astype(float)
+    patterns, counts = _patterns(gamma)
     m = {}
     for f in FIELDS:
         m[f] = np.r_[0.0, np.linspace(0.05, 1.0, LEVELS[f]) ** 3]  # start: agreement is likely
@@ -256,6 +326,7 @@ def fit_em(gamma: np.ndarray, u: dict[str, np.ndarray], max_iter: int = 500, tol
 # A training session blocks on one rule and estimates m for every field *except* the ones the rule
 # forces to agree. Each session's blocked pairs therefore behave like random pairs on the fields it
 # does estimate, which is what holding u fixed assumes.
+MIN_SESSION_PAIRS = 50
 TRAINING_SESSIONS: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
     "dob": (("std_dob",), ("dob",)),
     "phone": (("std_phone",), ("phone",)),
@@ -263,7 +334,8 @@ TRAINING_SESSIONS: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
 }
 
 
-def train(df: pd.DataFrame, cache: ComparisonCache | None = None, seed: int = 0) -> FSModel:
+def train(df: pd.DataFrame, cache: ComparisonCache | None = None, seed: int = 0,
+          tf_adjust: bool = True) -> FSModel:
     """Fit a Fellegi-Sunter model without labels.
 
     1. u from random record pairs.
@@ -274,12 +346,14 @@ def train(df: pd.DataFrame, cache: ComparisonCache | None = None, seed: int = 0)
        recall is measured in the *other* sessions). The median across sessions is used.
     """
     cache = cache or ComparisonCache()
-    u = estimate_u(df, seed=seed)
+    u = estimate_u(df, seed=seed, engine=cache)
     index = {f: k for k, f in enumerate(FIELDS)}
     m_estimates: dict[str, list[np.ndarray]] = {f: [] for f in FIELDS}
     sessions = {}
     for name, (cols, excluded) in TRAINING_SESSIONS.items():
-        pairs = candidate_pairs(df, rules={name: cols})
+        pairs = cache.pairs(df, rules={name: cols})
+        if len(pairs) < MIN_SESSION_PAIRS:
+            continue  # e.g. no phone numbers in this source: nothing to learn from this session
         gamma = cache.compare(df, pairs)
         masked = gamma.copy()
         for f in excluded:
@@ -289,7 +363,8 @@ def train(df: pd.DataFrame, cache: ComparisonCache | None = None, seed: int = 0)
             if f not in excluded:
                 m_estimates[f].append(fitted.m[f])
         sessions[name] = (len(pairs), fitted, gamma, fitted.posterior(masked))
-    m = {f: np.mean(m_estimates[f], axis=0) for f in FIELDS}
+    # A field no session could estimate (absent from the data) keeps a neutral m equal to u.
+    m = {f: np.mean(m_estimates[f], axis=0) if m_estimates[f] else u[f].copy() for f in FIELDS}
     match_counts = []
     for name, (n_pairs, fitted, _, _) in sessions.items():
         excluded = TRAINING_SESSIONS[name][1]
@@ -303,7 +378,8 @@ def train(df: pd.DataFrame, cache: ComparisonCache | None = None, seed: int = 0)
             match_counts.append(fitted.prior * n_pairs / np.mean(rates))
     n = len(df)
     prior = float(np.median(match_counts)) / (n * (n - 1) / 2)
-    return FSModel(m, u, prior, sum(s[1].iterations for s in sessions.values()))
+    tf = term_frequencies(df) if tf_adjust else {}
+    return FSModel(m, u, prior, sum(s[1].iterations for s in sessions.values()), tf)
 
 
 # ------------------------------------------------------------------------------------ clustering
@@ -353,10 +429,27 @@ class MatchResult:
     model: FSModel | None
 
 
+def identity_ok(gamma: np.ndarray) -> np.ndarray:
+    """The identity guard: a link needs the person's own identity to agree, not just their household's.
+
+    Either the ID agrees (exactly or within one keystroke), or both the first name and the date of
+    birth agree at least partly. Shared surname, address, phone or email are what household members
+    have in common, so on their own they never justify a link.
+    """
+    col = {f: k for k, f in enumerate(FIELDS)}
+    id_agrees = gamma[:, col["nid"]] >= 2
+    name_agrees = gamma[:, col["first"]] >= 2
+    dob_agrees_or_missing = (gamma[:, col["dob"]] >= 2) | (gamma[:, col["dob"]] == 0)
+    return id_agrees | (name_agrees & dob_agrees_or_missing)
+
+
 def link(df: pd.DataFrame, strategy: str, cache: ComparisonCache | None = None,
          threshold: float = 0.9, model: FSModel | None = None, constrained: bool = True,
          identity_guard: bool = True) -> MatchResult:
     """Cluster the rows of one standardised snapshot.
+
+    ``cache`` is the comparison engine: ``ComparisonCache`` (pure Python, the reference) or
+    ``duck.DuckDBEngine`` (the same comparisons as SQL). Both give identical results.
 
     For ``fellegi_sunter``, ``constrained`` turns on the cannot-link rule for trusted IDs, and
     ``identity_guard`` refuses any link where neither the first name nor the ID agrees, however much
@@ -365,8 +458,8 @@ def link(df: pd.DataFrame, strategy: str, cache: ComparisonCache | None = None,
     """
     if strategy not in STRATEGIES:
         raise ValueError(f"unknown strategy {strategy!r}; choose from {STRATEGIES}")
-    pairs = candidate_pairs(df)
     cache = cache or ComparisonCache()
+    pairs = cache.pairs(df)
     gamma = cache.compare(df, pairs) if len(pairs) else np.empty((0, len(FIELDS)), dtype=np.int8)
     a, b = pairs["a"].to_numpy(), pairs["b"].to_numpy()
     col = {f: k for k, f in enumerate(FIELDS)}
@@ -384,9 +477,11 @@ def link(df: pd.DataFrame, strategy: str, cache: ComparisonCache | None = None,
         labels = cluster(len(df), a[accept], b[accept], np.ones(accept.sum()))
         return MatchResult(labels, pairs, gamma, None)
     model = model or train(df, cache)
-    accept = model.posterior(gamma) >= threshold
+    values = pair_values(df, pairs)
+    accept = model.posterior(gamma, values) >= threshold
     if identity_guard:
-        accept &= (gamma[:, col["first"]] >= 2) | (gamma[:, col["nid"]] >= 2)
+        accept &= identity_ok(gamma)
     trusted = np.where(df["nid_trusted"].to_numpy(), df["std_nid"].to_numpy(), None) if constrained else None
-    labels = cluster(len(df), a[accept], b[accept], model.match_weight(gamma[accept]), trusted)
+    weights = model.match_weight(gamma, values)
+    labels = cluster(len(df), a[accept], b[accept], weights[accept], trusted)
     return MatchResult(labels, pairs, gamma, model)

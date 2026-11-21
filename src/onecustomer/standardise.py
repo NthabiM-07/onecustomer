@@ -95,8 +95,15 @@ def _id_dob(nid: str | None) -> str | None:
     return dob.isoformat() if dob else None
 
 
-def standardise(versions: pd.DataFrame) -> pd.DataFrame:
-    """Add ``std_*`` columns to a frame of source-record versions."""
+def standardise(versions: pd.DataFrame, id_scheme: str = "za") -> pd.DataFrame:
+    """Add ``std_*`` columns to a frame of source-record versions.
+
+    ``id_scheme="za"`` validates South African ID numbers (Luhn check digit and encoded birth date).
+    ``id_scheme="none"`` treats any present ID as valid but never trusted, because without a check
+    digit a mistyped ID cannot be told from a correct one (used for public benchmarks).
+    """
+    if id_scheme not in ("za", "none"):
+        raise ValueError(f"unknown id_scheme {id_scheme!r}")
     out = versions.copy()
     out["std_first"] = _map(out["first_name"], first_name)
     out["std_first_canon"] = _map(out["first_name"], first_name_canonical)
@@ -105,11 +112,15 @@ def standardise(versions: pd.DataFrame) -> pd.DataFrame:
     out["std_phone"] = _map(out["phone"], phone)
     out["std_email"] = _map(out["email"], email)
     out["std_nid"] = _map(out["national_id"], national_id)
-    out["nid_valid"] = _map(out["std_nid"], is_valid_id).astype(bool)
     out["std_dob"] = _map(out["dob"], lambda x: x)
-    # An ID is only trusted for constraints if it is valid *and* agrees with the captured birth date.
-    id_dob = _map(out["std_nid"], _id_dob)
-    out["nid_trusted"] = (out["nid_valid"] & (id_dob == out["std_dob"])).astype(bool)
+    if id_scheme == "za":
+        out["nid_valid"] = _map(out["std_nid"], is_valid_id).astype(bool)
+        # Trusted for constraints only if valid *and* consistent with the captured birth date.
+        id_dob = _map(out["std_nid"], _id_dob)
+        out["nid_trusted"] = (out["nid_valid"] & (id_dob == out["std_dob"])).astype(bool)
+    else:
+        out["nid_valid"] = out["std_nid"].notna().astype(bool)
+        out["nid_trusted"] = False
     out["std_address"] = _map(out["address_line"], address_line)
     out["std_postal"] = _map(out["postal_code"], lambda x: x)
     return out

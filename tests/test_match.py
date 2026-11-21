@@ -77,3 +77,44 @@ def test_strategies_order_as_expected_on_a_small_world(small_world):
 def test_unknown_strategy_is_rejected():
     with pytest.raises(ValueError):
         link(pd.DataFrame(), "magic")
+
+
+def test_swapped_names_are_partial_agreement():
+    a = with_(first="LUKE", canon="LUKE", surname="GAZZOLA")
+    b = with_(first="GAZZOLA", canon="GAZZOLA", surname="LUKE")
+    gamma = compare_rows(a, b)
+    assert gamma[FIELDS.index("first")] == 2 and gamma[FIELDS.index("surname")] == 2
+
+
+def test_identity_guard():
+    from onecustomer.match import identity_ok
+
+    col = {f: k for k, f in enumerate(FIELDS)}
+
+    def g(**levels):
+        row = np.zeros(len(FIELDS), dtype=np.int8)
+        for f, v in levels.items():
+            row[col[f]] = v
+        return row[None, :]
+
+    assert identity_ok(g(nid=3, first=1, dob=1))[0]  # the ID alone is enough
+    assert identity_ok(g(first=3, dob=3))[0]  # name and birth date
+    assert identity_ok(g(first=2, dob=0))[0]  # birth date missing on one side
+    assert not identity_ok(g(first=3, dob=1, surname=3, phone=2, address=3))[0]  # father and son
+    assert not identity_ok(g(first=1, dob=3, surname=3, phone=2, address=3))[0]  # twins without IDs
+
+
+def test_term_frequency_adjustment_rewards_rare_names(small_world):
+    from onecustomer.match import pair_values, train
+
+    final = snapshot(standardise(small_world.versions), 24)
+    model = train(final)
+    freq = model.tf["surname"]
+    common, rare = max(freq, key=freq.get), min(freq, key=freq.get)
+    gamma = np.zeros((2, len(FIELDS)), dtype=np.int8)
+    gamma[:, FIELDS.index("surname")] = 3
+    values = {"surname": np.array([common, rare], dtype=object),
+              "first": np.array([None, None], dtype=object)}
+    adj = model.tf_adjustment(gamma, values)["surname"]
+    assert adj[0] < 0 < adj[1]
+    assert set(pair_values(final, pd.DataFrame({"a": [0], "b": [1]}))) == {"surname", "first"}

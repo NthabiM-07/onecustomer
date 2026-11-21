@@ -62,3 +62,45 @@ def party_errors(labels: np.ndarray, truth: np.ndarray, balance: np.ndarray) -> 
         "exposure_wrong_people": int(wrong.sum()),
         "exposure_understated_rand": understated,
     }
+
+
+def b_cubed(labels: np.ndarray, truth: np.ndarray) -> dict[str, float]:
+    """B-cubed precision and recall: averaged per record, so a large wrong cluster counts per member.
+
+    For record r with predicted cluster C and true cluster T: precision |C & T| / |C|,
+    recall |C & T| / |T|.
+    """
+    frame = pd.DataFrame({"party": labels, "person": truth})
+    both = frame.groupby(["party", "person"]).size().rename("n").reset_index()
+    pred = frame.groupby("party").size().rename("c")
+    true = frame.groupby("person").size().rename("t")
+    both = both.join(pred, on="party").join(true, on="person")
+    n = len(frame)
+    precision = float((both["n"] * both["n"] / both["c"]).sum() / n)
+    recall = float((both["n"] * both["n"] / both["t"]).sum() / n)
+    return {"b3_precision": precision, "b3_recall": recall,
+            "b3_f1": 2 * precision * recall / (precision + recall) if precision + recall else 0.0}
+
+
+def cluster_exact(labels: np.ndarray, truth: np.ndarray) -> dict[str, float]:
+    """Share of predicted parties that are exactly one true entity, and of true entities recovered whole."""
+    frame = pd.DataFrame({"party": labels, "person": truth})
+    pred = frame.groupby("party")["person"].agg(lambda s: frozenset(s.index))
+    true = frame.groupby("person")["party"].agg(lambda s: frozenset(s.index))
+    pred_sets, true_sets = set(pred), set(true)
+    exact = len(pred_sets & true_sets)
+    return {"cluster_precision": exact / len(pred_sets), "cluster_recall": exact / len(true_sets)}
+
+
+def pair_completeness(pairs_a: np.ndarray, pairs_b: np.ndarray, truth: np.ndarray) -> float:
+    """Blocking recall: share of true matching pairs that blocking puts in front of the model."""
+    frame = pd.DataFrame({"person": truth})
+    sizes = frame.groupby("person").size().to_numpy(dtype=float)
+    true_pairs = (sizes * (sizes - 1) / 2).sum()
+    found = int((truth[pairs_a] == truth[pairs_b]).sum())
+    return found / true_pairs if true_pairs else 1.0
+
+
+def scorecard(labels: np.ndarray, truth: np.ndarray) -> dict[str, float]:
+    """Pairwise, B-cubed and exact-cluster metrics together."""
+    return {**pairwise(labels, truth), **b_cubed(labels, truth), **cluster_exact(labels, truth)}
