@@ -14,8 +14,8 @@ experiment:
 
 demo: data run
 	onecustomer audit
-	onecustomer lookup LN0000505
-	onecustomer lookup LN0000505 --as-of 2024-06
+	onecustomer lookup LN0006169
+	onecustomer lookup PTY00001005 --as-of 2024-06
 	onecustomer replay --month 12
 
 test:
