@@ -9,6 +9,7 @@ def row(key, system, **kw):
     base = {"record_key": key, "load_month": 1, "system": system, "nid_trusted": False, "nid_valid": False,
             "std_nid": None, "std_dob": "1990-01-01", "first_name": "THABO", "middle_name": None,
             "surname": "ZWANE", "std_phone": None, "std_email": None, "address_line": "1 MAIN ROAD",
+            "std_address": "1 MAIN ROAD",
             "city": "DURBAN", "postal_code": "4001", "balance": 100.0, "chg_name": 1, "chg_surname": 1,
             "chg_phone": 1, "chg_email": 1, "chg_address": 1}
     base.update(kw)
@@ -19,7 +20,8 @@ def test_survivorship_and_lineage():
     loans = row("LN1", "loans", nid_trusted=True, nid_valid=True, std_nid="9001015009087",
                 std_phone="0820000001", chg_phone=2, address_line="1 MAIN ROAD", chg_address=1)
     cards = row("CD1", "cards", first_name="Tumi", surname="Zwane-Nkosi", chg_surname=9,
-                std_phone="0820000002", chg_phone=7, address_line="9 Long St", city="Cape Town",
+                std_phone="0820000002", chg_phone=7, address_line="9 Long St", std_address="9 LONG STREET",
+                city="Cape Town",
                 postal_code="8001", chg_address=5, balance=50.0)
     gold = history.golden([cards, loans])
     lineage = json.loads(gold["lineage"])
@@ -27,9 +29,24 @@ def test_survivorship_and_lineage():
     assert gold["first_name"] == "Thabo" and lineage["first_name"] == "LN1"  # KYC record, title-cased
     assert gold["surname"] == "Zwane-Nkosi" and lineage["surname"] == "CD1"  # most recent change
     assert gold["phone"] == "0820000002" and lineage["phone"] == "CD1"
-    assert gold["address_line"] == "9 Long St" and lineage["address"] == "CD1"
+    assert gold["address_line"] == "9 Long Street" and lineage["address"] == "CD1"
     assert gold["total_exposure"] == 150.0
     assert gold["record_keys"] == "CD1|LN1" and gold["systems"] == "cards+loans"
+
+
+def test_new_duplicate_does_not_override_surname():
+    loans = row("LN1", "loans", nid_trusted=True, nid_valid=True, std_nid="9001015009087", chg_surname=0)
+    typo = row("CD7", "cards", surname="Zwaen", load_month=18, chg_surname=0)
+    assert history.golden([loans, typo])["surname"] == "Zwane"
+
+
+def test_formatting_alone_does_not_change_the_golden_record():
+    a = row("LN1", "loans", surname="VAN WYK", address_line="69 RIVONIA ROAD", std_address="69 RIVONIA ROAD",
+            city="KLERKSDORP")
+    b = row("LN1", "loans", surname="van Wyk", address_line="69 Rivonia Rd", std_address="69 RIVONIA ROAD",
+            city="Klerksdorp")
+    keep = ["surname", "address_line", "city"]
+    assert {k: history.golden([a])[k] for k in keep} == {k: history.golden([b])[k] for k in keep}
 
 
 def test_contact_ties_go_to_cards():
@@ -50,7 +67,7 @@ def test_change_months_track_attribute_groups():
     out = history.with_change_months(v)
     assert list(out["chg_phone"]) == [1, 4, 4]
     assert list(out["chg_address"]) == [1, 1, 9]
-    assert list(out["chg_surname"]) == [1, 1, 1]
+    assert list(out["chg_surname"]) == [0, 0, 0]  # onboarding capture is not an update
 
 
 def test_history_passes_audit(small_run):

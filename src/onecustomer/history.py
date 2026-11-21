@@ -9,11 +9,14 @@ records that choice as column-level lineage:
   common one.
 - ``first_name``, ``middle_name``: the KYC-ranked record (trusted ID first, then loans, since app
   sign-ups often carry nicknames).
-- ``surname``: the record whose surname changed most recently (a marriage reaches one system
-  before the other), ties to KYC rank.
+- ``surname``: the record whose surname was most recently *updated* after onboarding (a marriage
+  reaches one system before the other); with no updates, the KYC-ranked record.
 - ``phone``, ``email``, address: the record where that value changed most recently, ties to cards
   (customers maintain their own app profile).
 - ``total_exposure``: the sum over all member records.
+
+Golden values are copied from the winning record and shown in one canonical format (title case,
+street types spelled out), so a formatting difference between systems never opens a version.
 
 A new version is opened when any golden attribute or the set of member records changes. Rows are
 never rewritten: closing a version only sets its ``valid_to``.
@@ -43,25 +46,33 @@ HISTORY_COLUMNS = ["party_id", "version", "valid_from", "valid_to", "valid_from_
 
 
 def with_change_months(versions: pd.DataFrame) -> pd.DataFrame:
-    """Add ``chg_<group>``: the load month at which each attribute group took its current value."""
+    """Add ``chg_<group>``: the load month at which each attribute group took its current value.
+
+    For ``surname`` the onboarding capture counts as month 0, so only later updates win on recency.
+    """
     v = versions.sort_values(["record_key", "load_month"]).reset_index(drop=True)
     for group, cols in ATTRIBUTE_GROUPS.items():
         sig = pd.Series(["|".join("" if pd.isna(x) else str(x) for x in row)
                          for row in v[cols].to_numpy(dtype=object)], index=v.index)
         prev = sig.groupby(v["record_key"]).shift()
         changed = prev.isna() | (sig != prev)
-        v[f"chg_{group}"] = v["load_month"].where(changed).groupby(v["record_key"]).ffill().astype(int)
+        when = v["load_month"].where(changed)
+        if group == "surname":
+            # Only an update after onboarding counts. Otherwise every newly onboarded duplicate,
+            # typos included, would count as the latest surname and override the KYC record.
+            when = when.mask(prev.isna(), 0)
+        v[f"chg_{group}"] = when.groupby(v["record_key"]).ffill().astype(int)
     return v
 
 
 def _title(value) -> str | None:
-    """Present upper-case legacy captures in title case; leave mixed-case values as captured."""
+    """One canonical presentation (title case per word and hyphenated part), whatever the source case.
+
+    Without it, "VAN WYK" on one system and "van Wyk" on the other would open a new version.
+    """
     if value is None or (isinstance(value, float) and np.isnan(value)):
         return None
-    text = str(value)
-    if not text.isupper():
-        return text
-    return " ".join("-".join(p.capitalize() for p in w.split("-")) for w in text.split(" "))
+    return " ".join("-".join(p.capitalize() for p in w.split("-")) for w in str(value).split())
 
 
 def golden(rows: list[dict]) -> dict:
@@ -108,7 +119,7 @@ def golden(rows: list[dict]) -> dict:
         "surname": _title(surname_row["surname"]),
         "phone": phone_row["std_phone"] if phone_row else None,
         "email": email_row["std_email"] if email_row else None,
-        "address_line": _title(address_row["address_line"]) if address_row else None,
+        "address_line": _title(address_row["std_address"]) if address_row else None,
         "city": _title(address_row["city"]) if address_row else None,
         "postal_code": address_row["postal_code"] if address_row else None,
         "total_exposure": round(sum(float(r["balance"]) for r in rows), 2),
@@ -119,7 +130,8 @@ def golden(rows: list[dict]) -> dict:
 
 
 _ROW_FIELDS = ["record_key", "load_month", "system", "nid_trusted", "nid_valid", "std_nid", "std_dob",
-               "first_name", "middle_name", "surname", "std_phone", "std_email", "address_line", "city",
+               "first_name", "middle_name", "surname", "std_phone", "std_email", "address_line",
+               "std_address", "city",
                "postal_code", "balance", *(f"chg_{g}" for g in ATTRIBUTE_GROUPS)]
 
 
@@ -222,4 +234,14 @@ def audit(history: pd.DataFrame, crosswalk: pd.DataFrame | None = None) -> list[
         if missing:
             example = sorted(missing)[:3]
             problems.append(f"{len(missing)} retired parties have no crosswalk row, e.g. {example}")
+        # Following merged_into / split_into rows from any retired ID must end at a live party.
+        forward = crosswalk[crosswalk["reason"] != "split_from"].sort_values("month")
+        step = dict(zip(forward["from_party"], forward["to_party"], strict=True))
+        live = set(cur["party_id"])
+        for start in sorted(retired & set(step)):
+            party, hops = start, 0
+            while party not in live and party in step and hops < 100:
+                party, hops = step[party], hops + 1
+            if party not in live:
+                problems.append(f"{start}: crosswalk chain does not reach a live party")
     return problems
