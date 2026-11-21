@@ -1,0 +1,53 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "onecustomer"
+version = "0.1.0"
+description = "A customer master that matches people across two source systems and keeps every version of them"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "Nthabiseng Maoka" }]
+keywords = ["entity-resolution", "record-linkage", "fellegi-sunter", "scd2", "master-data", "credit-risk"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "License :: OSI Approved :: MIT License",
+    "Topic :: Scientific/Engineering :: Information Analysis",
+]
+dependencies = [
+    "pandas>=2.2",
+    "numpy>=1.26",
+    "pyarrow>=15",
+    "rapidfuzz>=3.6",
+    "matplotlib>=3.8",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "ruff>=0.6"]
+
+[project.urls]
+Repository = "https://github.com/NthabiM-07/onecustomer"
+Issues = "https://github.com/NthabiM-07/onecustomer/issues"
+
+[project.scripts]
+onecustomer = "onecustomer.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.ruff]
+line-length = 110
+target-version = "py311"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "SIM", "RUF"]
