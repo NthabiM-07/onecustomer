@@ -170,6 +170,17 @@ class _Population:
         self.used_emails.add(f"{local}@{domain}")
         return f"{local}@{domain}"
 
+    def new_email_domain(self, email: str) -> str:
+        """The same mailbox name at a new provider, kept unique across the population."""
+        local = email.split("@")[0]
+        while True:
+            domain = ref.EMAIL_DOMAINS[int(self.rng.integers(len(ref.EMAIL_DOMAINS)))]
+            candidate = f"{local}@{domain}"
+            if candidate not in self.used_emails:
+                self.used_emails.add(candidate)
+                return candidate
+            local = f"{email.split('@')[0]}{int(self.rng.integers(1, 99))}"
+
     def add(self, hh: int, gender: str, first: str, surname: str, dob: date, address, **flags) -> dict:
         rng = self.rng
         middle = self.first(gender, exclude=first) if rng.random() < 0.55 else None
@@ -461,7 +472,7 @@ def _life_events(sim: _Systems, month: int) -> None:
             p["ver"]["phone"] += 1
             sim.schedule(p, "phone", month, p["phone"])
         if p["email"] is not None and rng.random() < cfg.p_email_change:
-            p["email"] = p["email"].split("@")[0] + "@" + ref.EMAIL_DOMAINS[int(rng.integers(6))]
+            p["email"] = sim.population.new_email_domain(p["email"])
             p["ver"]["email"] += 1
             sim.schedule(p, "email", month, p["email"])
         age = 2024 - p["dob"].year
