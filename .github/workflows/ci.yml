@@ -1,0 +1,66 @@
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install "ruff>=0.6"
+      - run: ruff check src tests
+
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - name: Install
+        run: pip install -e ".[dev]"
+      - name: Unit and end-to-end tests
+        run: pytest
+      - name: History gate
+        # Build 24 months, check the SCD2 invariants, then rebuild from scratch through
+        # month 9 and require it to match the saved table read as of that month.
+        run: |
+          onecustomer generate --people 1500 --seed 1
+          onecustomer run
+          onecustomer audit
+          onecustomer replay --month 9
+
+  experiment:
+    # The full experiment on a smaller world. Fails on any audit violation or replay mismatch.
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - run: pip install -e .
+      - run: onecustomer generate --people 3000 --seed 7
+      - run: onecustomer experiment --out ci-reports --replay 6 12
+      - uses: actions/upload-artifact@v4
+        with:
+          name: experiment-report
+          path: ci-reports/
