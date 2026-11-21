@@ -67,6 +67,7 @@ class WorldConfig:
     p_surname_typo: tuple[tuple[str, float], ...] = (("loans", 0.02), ("cards", 0.015))
     p_nickname: float = 0.25  # cards only, when the first name has a known short form
     p_dob_swap: float = 0.02  # cards only, day/month swapped when day <= 12
+    p_dob_typo: tuple[tuple[str, float], ...] = (("loans", 0.01), ("cards", 0.005))  # day mistyped
     p_phone_missing: tuple[tuple[str, float], ...] = (("loans", 0.15), ("cards", 0.03))
     p_phone_of_relative: float = 0.03  # a household member's number captured instead
     p_email_missing: tuple[tuple[str, float], ...] = (("loans", 0.75), ("cards", 0.08))
@@ -354,6 +355,8 @@ class _Systems:
         dob = person["dob"]
         if system == "cards" and dob.day <= 12 and dob.day != dob.month and rng.random() < cfg.p_dob_swap:
             dob = date(dob.year, dob.day, dob.month)
+        elif rng.random() < cfg.by_system("p_dob_typo", system):
+            dob = dob.replace(day=int(rng.choice([d for d in range(1, 29) if d != dob.day])))
 
         phone = person["phone"]
         relatives = [m for m in self.households[person["household_id"]] if m is not person]
