@@ -1,0 +1,104 @@
+[
+  {
+    "engine": "python",
+    "people": 10000,
+    "records": 14946,
+    "candidate_pairs": 21891,
+    "seconds": {
+      "standardise": 0.13,
+      "blocking": 0.11,
+      "comparison": 0.1,
+      "training": 0.92,
+      "scoring_and_clustering": 0.01
+    },
+    "total_seconds": 1.27,
+    "peak_memory_mb": 232,
+    "precision": 1.0,
+    "recall": 0.9978943338437979
+  },
+  {
+    "engine": "duckdb",
+    "people": 10000,
+    "records": 14946,
+    "candidate_pairs": 21891,
+    "seconds": {
+      "standardise": 0.17,
+      "blocking": 0.09,
+      "comparison": 0.08,
+      "training": 0.77,
+      "scoring_and_clustering": 0.02
+    },
+    "total_seconds": 1.13,
+    "peak_memory_mb": 294,
+    "precision": 1.0,
+    "recall": 0.9978943338437979
+  },
+  {
+    "engine": "python",
+    "people": 100000,
+    "records": 149168,
+    "candidate_pairs": 379883,
+    "seconds": {
+      "standardise": 1.41,
+      "blocking": 1.19,
+      "comparison": 2.43,
+      "training": 8.99,
+      "scoring_and_clustering": 0.18
+    },
+    "total_seconds": 14.2,
+    "peak_memory_mb": 1058,
+    "precision": 1.0,
+    "recall": 0.9971802151534465
+  },
+  {
+    "engine": "duckdb",
+    "people": 100000,
+    "records": 149168,
+    "candidate_pairs": 379883,
+    "seconds": {
+      "standardise": 1.31,
+      "blocking": 0.68,
+      "comparison": 1.24,
+      "training": 3.6,
+      "scoring_and_clustering": 0.18
+    },
+    "total_seconds": 7.01,
+    "peak_memory_mb": 762,
+    "precision": 1.0,
+    "recall": 0.9971802151534465
+  },
+  {
+    "engine": "python",
+    "people": 700000,
+    "records": 1044396,
+    "candidate_pairs": 9785959,
+    "seconds": {
+      "standardise": 9.4,
+      "blocking": 16.31,
+      "comparison": 57.48,
+      "training": 63.29,
+      "scoring_and_clustering": 3.81
+    },
+    "total_seconds": 150.29,
+    "peak_memory_mb": 6021,
+    "precision": 0.9999640550345071,
+    "recall": 0.9964676675860282
+  },
+  {
+    "engine": "duckdb",
+    "people": 700000,
+    "records": 1044396,
+    "candidate_pairs": 9785959,
+    "seconds": {
+      "standardise": 9.25,
+      "blocking": 6.55,
+      "comparison": 15.48,
+      "training": 15.41,
+      "scoring_and_clustering": 3.63
+    },
+    "total_seconds": 50.32,
+    "peak_memory_mb": 3712,
+    "precision": 0.9999640550345071,
+    "recall": 0.9964676675860282
+  }
+]
