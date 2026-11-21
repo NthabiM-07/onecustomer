@@ -29,10 +29,17 @@ Every ID that stops being used gets a crosswalk row:
 
 ## Consequences
 
-Over 24 loads, no record's party ID changed unless its links changed. All 45 key changes came from
+Over 24 loads, no record's party ID changed unless its links changed. All 22 key changes came from
 a real merge or split, and every retired ID has a crosswalk row that leads to a live party (both
-checked by `onecustomer audit`). Renumbering changed 77,287 keys with no change in links; the
-smallest-key approach changed 1,081.
+checked by `onecustomer audit`). Renumbering changed 74,879 keys with no change in links; the
+smallest-key approach changed 1,080.
+
+Splink's own clusters take the smallest record ID as the cluster ID, so they behave like the
+smallest-key approach here, and its maintainers note that incremental clustering is left to the
+user ([discussion #869](https://github.com/moj-analytical-services/splink/discussions/869)). The UK
+Ministry of Justice describes building a separate stable-ID step around Splink in production
+([blog, January 2026](https://moj-analytical-services.github.io/splink/blog/2026/01/29/running-splink-in-production.html)).
+Zingg offers persistent IDs only in its Enterprise edition. This ADR is that layer, in the open.
 
 Consumers that stored an old ID resolve it through the crosswalk. Following `merged_into` and
 `split_into` rows always ends at a live party.

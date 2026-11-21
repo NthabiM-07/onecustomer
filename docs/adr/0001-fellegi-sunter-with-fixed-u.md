@@ -29,6 +29,21 @@ Score candidate pairs with a Fellegi-Sunter model learnt without labels:
 
 The model is retrained on every monthly load, using only the data loaded so far.
 
+Exact agreement on a first name or surname is then adjusted for how common the value is, as Splink
+does with term-frequency adjustments: the u of exact agreement is replaced by the share of records
+holding that value. Agreeing on DLAMINI is weaker evidence than agreeing on a surname held by one
+person in five thousand.
+
+## Prior art
+
+The model is Fellegi and Sunter's (1969). Estimating u from random pairs, m by EM in sessions that
+leave out their blocking fields, the prior from rule recall, and term-frequency adjustments are all
+how [Splink](https://github.com/moj-analytical-services/splink) (UK Ministry of Justice) trains the
+same model. onecustomer re-implements that recipe rather than calling Splink, for two reasons: to show
+the mechanics end to end, and because the parts that sit around it here (the constraints in ADR 0002,
+stable keys in ADR 0003 and history in ADR 0004) need direct access to the comparison vectors and
+weights. On FEBRL4, Splink itself is the baseline (ADR 0005).
+
 ## Consequences
 
 - A first attempt ran EM on the union of all blocked pairs and estimated u and m together. Most

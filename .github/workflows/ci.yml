@@ -46,6 +46,26 @@ jobs:
           onecustomer audit
           onecustomer replay --month 9
 
+  public-benchmark:
+    # FEBRL4: public data this repository did not generate, with Splink 5 as the baseline.
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - run: pip install -e ".[dev,bench]"
+      - name: FEBRL4 regression test
+        run: pytest tests/test_benchmark.py
+      - run: onecustomer benchmark --out ci-reports
+      - uses: actions/upload-artifact@v4
+        with:
+          name: febrl4-benchmark
+          path: ci-reports/
+
   experiment:
     # The full experiment on a smaller world. Fails on any audit violation or replay mismatch.
     needs: test

@@ -24,8 +24,15 @@ Two rules sit on top of the weights:
    date matches the captured one. Clustering joins the strongest links first and never joins two
    groups holding different trusted IDs. This blocks chaining (A links to B, B to C, so A and C
    merge) as well as direct links.
-2. **Identity guard.** A link is rejected unless the first name or the ID agrees at least partly.
-   Contact details show that people share a household, not that they are the same person.
+2. **Identity guard.** A link must rest on the person's own identity: either the ID agrees (exactly
+   or within one keystroke), or the first name *and* the date of birth agree at least partly (a
+   birth date missing on one side does not count against it). Shared surname, address, phone and
+   email are what household members have in common, so on their own they never justify a link.
+
+The first version of the guard asked only for the first name or the ID. That still merged a father
+and son with the same name at the same address when the father's record had no ID: their birth
+dates, decades apart, cost about 5 bits, and the shared phone and address added about 27. The birth
+date requirement closed that gap.
 
 ## Consequences
 
@@ -33,18 +40,17 @@ On the 10,000-person run (December 2025 load):
 
 | | Customers split | Customers falsely merged | Twin pairs merged |
 |---|---|---|---|
-| Weights only | 4 | 423 | 66 of 77 |
-| + cannot-link | 4 | 40 | 5 of 77 |
-| + identity guard | 13 | 4 | 0 of 77 |
+| Weights only | 1 | 332 | 55 of 77 |
+| + cannot-link | 2 | 46 | 5 of 77 |
+| + identity guard | 10 | 0 | 0 of 77 |
 
-The guard trades 9 more split customers for 36 fewer false merges. That is the intended trade.
+The guard trades 8 more split customers for 46 fewer false merges. That is the intended trade. At
+every posterior threshold from 0.5 to 0.999 the false merges stay at zero; only the number of split
+customers moves (9 to 23).
 
-What is left:
+The guard also costs recall on FEBRL4, where some duplicates had both the given name and the ID
+replaced and are still counted as the same person (ADR 0005).
 
-- **4 customers in 2 false merges.** Both are a parent and child with the same first name, surname,
-  address and phone number, where the parent's record has no ID. A different date of birth costs
-  about 5 bits; a shared phone and address add about 27. A rule that refuses links when birth dates
-  differ by decades would catch these. It is not added here because it would also refuse real
-  matches whose date of birth was captured wrongly.
-- **13 split customers.** In every case one record has no trusted ID, and in most the first name is
-  also mistyped (GERAHRD, LUDKY, YUUSUF). These are the cases a data steward queue should review.
+The 10 customers left split all have one record without a trusted ID, and most have a mistyped first
+name on one side ("Kat" and "KATLEEGO"). `onecustomer review-queue` lists them, together with the
+pairs the guard vetoed despite a confident score, for a data steward to label.

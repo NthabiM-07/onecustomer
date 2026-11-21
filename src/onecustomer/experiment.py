@@ -17,9 +17,10 @@ import numpy as np
 import pandas as pd
 
 from . import history, keys
-from .evaluate import pairwise, party_errors
+from .evaluate import pair_completeness, pairwise, party_errors, scorecard
+from .explain import review_queue
 from .generate import N_MONTHS, World, month_end, snapshot
-from .match import ComparisonCache, link, train
+from .match import ComparisonCache, candidate_pairs, link, train
 from .pipeline import match_months, run
 from .standardise import standardise
 
@@ -29,6 +30,9 @@ STRATEGY_CONFIGS = [
     ("Fellegi-Sunter weights only", "fellegi_sunter", {"constrained": False, "identity_guard": False}),
     ("+ trusted-ID cannot-link", "fellegi_sunter", {"identity_guard": False}),
     ("+ identity guard (onecustomer)", "fellegi_sunter", {}),
+]
+ABLATIONS = [
+    ("onecustomer without term-frequency adjustment", {"tf_adjust": False}),
 ]
 THRESHOLDS = [0.5, 0.8, 0.9, 0.95, 0.99, 0.999]
 
@@ -60,18 +64,38 @@ def _hard_negative_merges(labels: np.ndarray, truth: np.ndarray, people: pd.Data
     }
 
 
-def _matching(final: pd.DataFrame, truth: np.ndarray, people: pd.DataFrame) -> dict:
+def _score(label: str, labels: np.ndarray, final: pd.DataFrame, truth: np.ndarray,
+           people: pd.DataFrame) -> dict:
+    return {
+        "strategy": label,
+        **scorecard(labels, truth),
+        **party_errors(labels, truth, final["balance"].to_numpy(dtype=float)),
+        **_hard_negative_merges(labels, truth, people),
+    }
+
+
+def _matching(final: pd.DataFrame, truth: np.ndarray, people: pd.DataFrame,
+              month12: pd.DataFrame | None = None) -> dict:
     cache = ComparisonCache()
     model = train(final, cache)
     rows = []
     for label, strategy, kwargs in STRATEGY_CONFIGS:
         result = link(final, strategy, cache=cache, model=model, **kwargs)
-        rows.append({
-            "strategy": label,
-            **pairwise(result.labels, truth),
-            **party_errors(result.labels, truth, final["balance"].to_numpy(dtype=float)),
-            **_hard_negative_merges(result.labels, truth, people),
-        })
+        rows.append(_score(label, result.labels, final, truth, people))
+    ablations = []
+    for label, train_kwargs in ABLATIONS:
+        variant = train(final, cache, **train_kwargs)
+        result = link(final, "fellegi_sunter", cache=cache, model=variant)
+        ablations.append(_score(label, result.labels, final, truth, people))
+    holdout = None
+    if month12 is not None:
+        # Temporal holdout: parameters learnt on the June 2024 load, frozen, applied to December 2025.
+        frozen = train(month12, ComparisonCache())
+        result = link(final, "fellegi_sunter", cache=cache, model=frozen)
+        holdout = _score("model trained on month 12, applied to month 24", result.labels, final, truth,
+                         people)
+    pairs = candidate_pairs(final)
+    queue = review_queue(final, model)
     sweep = []
     for threshold in THRESHOLDS:
         result = link(final, "fellegi_sunter", cache=cache, model=model, threshold=threshold)
@@ -79,7 +103,11 @@ def _matching(final: pd.DataFrame, truth: np.ndarray, people: pd.DataFrame) -> d
         sweep.append({"threshold": threshold, **pairwise(result.labels, truth),
                       "people_split": errors["people_split"],
                       "people_in_false_merges": errors["people_in_false_merges"]})
-    return {"strategies": rows, "threshold_sweep": sweep, "model": model.as_dict(),
+    return {"strategies": rows, "ablations": ablations, "temporal_holdout": holdout,
+            "candidate_pairs": len(pairs),
+            "pair_completeness": pair_completeness(pairs["a"].to_numpy(), pairs["b"].to_numpy(), truth),
+            "review_queue": {"pairs": len(queue), **queue["reason"].value_counts().to_dict()},
+            "threshold_sweep": sweep, "model": model.as_dict(),
             "level_weights": {f: [round(float(x), 2) for x in w[1:]]
                               for f, w in model.level_weights().items()}}
 
@@ -206,7 +234,7 @@ def experiment(world: World, out: Path = Path("reports"), replay_months: tuple[i
                   "twin_pairs": int(world.people["twin_of"].notna().sum()),
                   "father_son_pairs": int(world.people["junior_of"].notna().sum())},
     }
-    results["matching"] = _matching(final, truth, world.people)
+    results["matching"] = _matching(final, truth, world.people, snapshot(std, 12))
 
     monthly = match_months(std, N_MONTHS)
     quality = []

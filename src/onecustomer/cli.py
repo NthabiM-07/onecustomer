@@ -112,6 +112,55 @@ def cmd_replay(args) -> int:
     return 0 if same else 1
 
 
+def _snapshot_and_model(data: Path, month: int):
+    from .generate import snapshot
+    from .match import train
+    from .standardise import standardise
+
+    snap = snapshot(standardise(load(data).versions), month)
+    return snap, train(snap)
+
+
+def cmd_explain(args) -> int:
+    from .explain import explain_pair, render
+
+    snap, model = _snapshot_and_model(args.data, args.month)
+    print(render(explain_pair(snap, model, args.record_a, args.record_b)))
+    return 0
+
+
+def cmd_review(args) -> int:
+    from .explain import review_queue
+
+    snap, model = _snapshot_and_model(args.data, args.month)
+    queue = review_queue(snap, model)
+    queue.to_csv(args.out, index=False)
+    print(f"{len(queue):,} pairs for review -> {args.out}")
+    print(queue["reason"].value_counts().to_string())
+    return 0
+
+
+def cmd_benchmark(args) -> int:
+    from . import febrl
+
+    result = febrl.benchmark(with_splink=not args.no_splink)
+    args.out.mkdir(parents=True, exist_ok=True)
+    (args.out / "febrl4.json").write_text(json.dumps(result, indent=2))
+    text = febrl.render(result)
+    (args.out / "febrl4.md").write_text(text)
+    print(text)
+    return 0
+
+
+def cmd_scale(args) -> int:
+    from . import scale
+
+    args.out.mkdir(parents=True, exist_ok=True)
+    results = scale.benchmark(tuple(args.people), tuple(args.engines), save_to=args.out / "scale.json")
+    scale.chart(results, args.out / "scaling.png")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="onecustomer", description=__doc__)
     parser.add_argument("--data", type=Path, default=DATA)
@@ -136,6 +185,24 @@ def main(argv: list[str] | None = None) -> int:
     rp = sub.add_parser("replay", help="rebuild through one month and compare with the saved history")
     rp.add_argument("--month", type=_month, required=True)
     rp.set_defaults(func=cmd_replay)
+    ex = sub.add_parser("explain", help="match-weight waterfall for two source records")
+    ex.add_argument("record_a")
+    ex.add_argument("record_b")
+    ex.add_argument("--month", type=_month, default=N_MONTHS)
+    ex.set_defaults(func=cmd_explain)
+    rq = sub.add_parser("review-queue", help="pairs a data steward should label, as CSV")
+    rq.add_argument("--month", type=_month, default=N_MONTHS)
+    rq.add_argument("--out", type=Path, default=Path("review_queue.csv"))
+    rq.set_defaults(func=cmd_review)
+    bm = sub.add_parser("benchmark", help="FEBRL4 public benchmark, with Splink as a baseline")
+    bm.add_argument("--out", type=Path, default=Path("reports"))
+    bm.add_argument("--no-splink", action="store_true", help="skip the Splink baseline")
+    bm.set_defaults(func=cmd_benchmark)
+    sc = sub.add_parser("scale", help="time one load at several sizes with both engines")
+    sc.add_argument("--people", type=int, nargs="+", default=[10_000, 100_000, 700_000])
+    sc.add_argument("--engines", nargs="+", default=["python", "duckdb"], choices=["python", "duckdb"])
+    sc.add_argument("--out", type=Path, default=Path("reports"))
+    sc.set_defaults(func=cmd_scale)
     args = parser.parse_args(argv)
     return args.func(args)
 

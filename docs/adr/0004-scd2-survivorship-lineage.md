@@ -30,7 +30,7 @@ neither question.
 ## Consequences
 
 - An SCD1 table answers 12.7% of point-in-time address lookups wrongly, and 8.6% of phone lookups,
-  over 206,508 party-months.
+  over 206,536 party-months.
 - `onecustomer replay --month M` rebuilds the history from scratch using only loads up to M and
   compares it with the saved table read as of M. They match exactly, which shows that later loads
   never rewrote earlier versions.
