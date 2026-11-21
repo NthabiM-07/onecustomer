@@ -57,7 +57,7 @@ def candidate_pairs(df: pd.DataFrame, max_block: int = MAX_BLOCK,
         sub = work.dropna(subset=list(cols))
         if sub.empty:
             continue
-        key = sub[list(cols)].astype(str).agg("|".join, axis=1)
+        key = sub.groupby(list(cols), sort=False).ngroup()
         sizes = key.map(key.value_counts())
         sub = pd.DataFrame({"k": key, "_pos": sub["_pos"]})[(sizes >= 2) & (sizes <= max_block)]
         joined = sub.merge(sub, on="k", suffixes=("_a", "_b"))
