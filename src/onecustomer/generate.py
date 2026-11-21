@@ -164,22 +164,27 @@ class _Population:
             return None
         local_base = f"{first}.{surname}".lower().replace(" ", "")
         domain = ref.EMAIL_DOMAINS[int(self.rng.integers(len(ref.EMAIL_DOMAINS)))]
-        local = local_base
+        local, tries = local_base, 0
         while f"{local}@{domain}" in self.used_emails:
-            local = f"{local_base}{int(self.rng.integers(1, 99))}"
+            tries += 1
+            # Random two-digit suffixes first; a counter guarantees an end in very large worlds,
+            # where a common name can outnumber the two-digit suffixes on one domain.
+            local = f"{local_base}{int(self.rng.integers(1, 99))}" if tries < 20 else f"{local_base}{tries}"
         self.used_emails.add(f"{local}@{domain}")
         return f"{local}@{domain}"
 
     def new_email_domain(self, email: str) -> str:
         """The same mailbox name at a new provider, kept unique across the population."""
-        local = email.split("@")[0]
+        local, tries = email.split("@")[0], 0
         while True:
             domain = ref.EMAIL_DOMAINS[int(self.rng.integers(len(ref.EMAIL_DOMAINS)))]
             candidate = f"{local}@{domain}"
             if candidate not in self.used_emails:
                 self.used_emails.add(candidate)
                 return candidate
-            local = f"{email.split('@')[0]}{int(self.rng.integers(1, 99))}"
+            tries += 1
+            suffix = int(self.rng.integers(1, 99)) if tries < 20 else 100 + tries
+            local = f"{email.split('@')[0]}{suffix}"
 
     def add(self, hh: int, gender: str, first: str, surname: str, dob: date, address, **flags) -> dict:
         rng = self.rng
